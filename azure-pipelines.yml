@@ -1,0 +1,183 @@
+trigger:
+  branches:
+    include:
+      - master
+      - main
+
+variables:
+
+  NODE_VERSION: '20.x'
+
+  IMAGE_NAME: 'tablemaster'
+  IMAGE_TAG: '$(Build.BuildId)'
+
+  ACR_NAME: 'robodevelopacr'
+
+  ACR_SERVICE_CONNECTION: 'acr-sc-ck'
+  K8S_SERVICE_CONNECTION: 'aks-dev-robo-sc'
+
+  NAMESPACE: 'ns-arav'
+
+  SONAR_PROJECT_KEY: 'tablemaster'
+  SONAR_PROJECT_NAME: 'TableMaster'
+
+pool:
+  name: default
+
+stages:
+
+# ===================================================
+# BUILD + SONARQUBE
+# ===================================================
+
+- stage: Build
+  displayName: Build and SonarQube Scan
+
+  jobs:
+
+  - job: BuildJob
+    displayName: Build Application
+
+    steps:
+
+    - checkout: self
+
+    - task: NodeTool@0
+      displayName: Install NodeJS
+      inputs:
+        versionSpec: $(NODE_VERSION)
+
+    - script: |
+        npm ci
+      workingDirectory: app
+      displayName: Install Dependencies
+
+    - task: SonarQubePrepare@7
+      displayName: Prepare SonarQube Analysis
+      inputs:
+        SonarQube: 'sonarqube-sc'
+        scannerMode: 'CLI'
+        configMode: 'manual'
+        cliProjectKey: '$(SONAR_PROJECT_KEY)'
+        cliProjectName: '$(SONAR_PROJECT_NAME)'
+        cliSources: 'app/src'
+        extraProperties: |
+          sonar.sourceEncoding=UTF-8
+          sonar.exclusions=**/node_modules/**,**/dist/**
+
+    - script: |
+        npm run build
+      workingDirectory: app
+      displayName: Build Application
+
+    - task: SonarQubeAnalyze@7
+      displayName: Run SonarQube Analysis
+
+    - task: SonarQubePublish@7
+      displayName: Publish Quality Gate
+      inputs:
+        pollingTimeoutSec: '300'
+
+# ===================================================
+# DOCKER BUILD + PUSH TO ACR
+# ===================================================
+
+- stage: Docker
+  displayName: Build and Push Docker Image
+  dependsOn: Build
+
+  jobs:
+
+  - job: DockerBuild
+    displayName: Build Docker Image
+
+    steps:
+
+    - checkout: self
+
+    - script: |
+        docker --version
+        docker ps
+      displayName: Verify Docker
+
+    - task: Docker@2
+      displayName: Build and Push Image
+      inputs:
+        command: buildAndPush
+        containerRegistry: $(ACR_SERVICE_CONNECTION)
+        repository: $(IMAGE_NAME)
+        dockerfile: app/Dockerfile
+        buildContext: app
+        tags: |
+          $(IMAGE_TAG)
+          latest
+
+# ===================================================
+# DEPLOY TO AKS
+# ===================================================
+
+- stage: Deploy
+  displayName: Deploy to AKS
+  dependsOn: Docker
+
+  jobs:
+
+  - deployment: DeployToAKS
+
+    displayName: Deploy Application
+
+    environment: aks-dev
+
+    strategy:
+
+      runOnce:
+
+        deploy:
+
+          steps:
+
+          - checkout: self
+
+          - task: KubernetesManifest@1
+            displayName: Create Namespace
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: $(K8S_SERVICE_CONNECTION)
+              namespace: $(NAMESPACE)
+              manifests: |
+                infra/kubernetes/namespace.yaml
+
+          - task: KubernetesManifest@1
+            displayName: Deploy Application
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: $(K8S_SERVICE_CONNECTION)
+              namespace: $(NAMESPACE)
+              manifests: |
+                infra/kubernetes/deployment.yaml
+                infra/kubernetes/service.yaml
+
+              containers: |
+                $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(IMAGE_TAG)
+
+# ===================================================
+# POST DEPLOY VALIDATION
+# ===================================================
+
+          - task: Kubernetes@1
+            displayName: Verify Deployment
+            inputs:
+              connectionType: Kubernetes Service Connection
+              kubernetesServiceEndpoint: $(K8S_SERVICE_CONNECTION)
+              namespace: $(NAMESPACE)
+              command: get
+              arguments: pods
+
+          - task: Kubernetes@1
+            displayName: Verify Service
+            inputs:
+              connectionType: Kubernetes Service Connection
+              kubernetesServiceEndpoint: $(K8S_SERVICE_CONNECTION)
+              namespace: $(NAMESPACE)
+              command: get
+              arguments: svc
