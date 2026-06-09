@@ -1,23 +1,19 @@
-trigger:
-  branches:
-    include:
-      - master
-      - main
+name: sonarqube-code-analysis-pipeline
+trigger: none
+  # branches:
+  #   include:
+  #     - master
+  #     - main
 
 variables:
 
   NODE_VERSION: '20.x'
-
   IMAGE_NAME: 'tablemaster'
   IMAGE_TAG: '$(Build.BuildId)'
-
   ACR_NAME: 'robodevelopacr'
-
   ACR_SERVICE_CONNECTION: 'acr-sc-ck'
   K8S_SERVICE_CONNECTION: 'aks-dev-robo-sc'
-
   NAMESPACE: 'ns-arav'
-
   SONAR_PROJECT_KEY: 'tablemaster'
   SONAR_PROJECT_NAME: 'TableMaster'
 
@@ -32,16 +28,11 @@ stages:
 
 - stage: Build
   displayName: Build and SonarQube Scan
-
   jobs:
-
   - job: BuildJob
     displayName: Build Application
-
     steps:
-
     - checkout: self
-
     - task: NodeTool@0
       displayName: Install NodeJS
       inputs:
@@ -51,29 +42,25 @@ stages:
         npm ci
       workingDirectory: app
       displayName: Install Dependencies
-
-    - task: SonarQubePrepare@7
+    - task: SonarQubePrepare@8
       displayName: Prepare SonarQube Analysis
       inputs:
-        SonarQube: 'sonarqube-sc'
-        scannerMode: 'CLI'
+        SonarQube: 'sonar-new-sc'
+        scannerMode: 'cli'
         configMode: 'manual'
-        cliProjectKey: '$(SONAR_PROJECT_KEY)'
-        cliProjectName: '$(SONAR_PROJECT_NAME)'
+        cliProjectKey: 'tablemaster'
+        cliProjectName: 'TableMaster'
         cliSources: 'app/src'
-        extraProperties: |
-          sonar.sourceEncoding=UTF-8
-          sonar.exclusions=**/node_modules/**,**/dist/**
 
     - script: |
         npm run build
       workingDirectory: app
       displayName: Build Application
 
-    - task: SonarQubeAnalyze@7
+    - task: SonarQubeAnalyze@8
       displayName: Run SonarQube Analysis
 
-    - task: SonarQubePublish@7
+    - task: SonarQubePublish@8
       displayName: Publish Quality Gate
       inputs:
         pollingTimeoutSec: '300'
